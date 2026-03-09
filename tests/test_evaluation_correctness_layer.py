@@ -217,6 +217,7 @@ def test_needs_review_approve_does_not_duplicate_route(tmp_path, monkeypatch):
         config=EvaluationConfig(
             enabled=True,
             use_ragas=True,
+            ragas_sample_rate=1.0,
             diff_threshold=0.2,
             async_evaluation=False,
             min_query_length=1,

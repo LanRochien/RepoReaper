@@ -360,6 +360,7 @@ class TracingService:
     
     def _log_locally(self, log_type: str, data: Dict) -> None:
         """本地日志记录"""
+        os.makedirs(self.config.local_log_dir, exist_ok=True)
         log_file = os.path.join(
             self.config.local_log_dir,
             f"{log_type}_{datetime.now().strftime('%Y%m%d')}.jsonl"

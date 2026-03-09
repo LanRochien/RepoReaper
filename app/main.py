@@ -15,14 +15,13 @@ from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from app.core.config import settings
+from app.core.config import settings, auto_eval_config as runtime_auto_eval_config
 from app.services.agent_service import agent_stream
 from app.services.chat_service import process_chat_stream, get_eval_data, clear_eval_data
 from app.services.vector_service import store_manager
 from app.services.auto_evaluation_service import (
     init_auto_evaluation_service,
     get_auto_evaluation_service,
-    EvaluationConfig
 )
 from evaluation.evaluation_framework import EvaluationEngine, EvaluationResult, DataRoutingEngine
 from datetime import datetime
@@ -51,6 +50,11 @@ async def lifespan(app: FastAPI):
     
     # 清理向量存储连接
     await store_manager.close_all()
+
+    # 关闭自动评估后台 worker
+    auto_eval_service = get_auto_evaluation_service()
+    if auto_eval_service:
+        await auto_eval_service.shutdown()
     
     # 关闭共享的 Qdrant 客户端
     from app.storage.qdrant_store import close_shared_client
@@ -65,21 +69,11 @@ from app.utils.llm_client import client
 eval_engine = EvaluationEngine(llm_client=client, model_name=settings.default_model_name)
 data_router = DataRoutingEngine()
 
-# === 初始化自动评估服务 (Phase 1) ===
-auto_eval_config = EvaluationConfig(
-    enabled=True,
-    use_ragas=False,              # Phase 1: 先不用 Ragas，避免额外依赖
-    async_evaluation=True,        # 异步模式，不阻塞响应
-    min_quality_score=0.4,        # 兼容字段，实际路由以 DataQualityTier 统一判定
-    min_query_length=10,          # 最小 query 长度
-    min_answer_length=100,        # 最小 answer 长度
-    require_repo_url=True,        # 必须有仓库 URL
-    require_code_in_context=True  # 上下文必须包含代码
-)
+# === 初始化自动评估服务 (配置解耦到 app.core.config) ===
 auto_eval_service = init_auto_evaluation_service(
     eval_engine=eval_engine,
     data_router=data_router,
-    config=auto_eval_config
+    config=runtime_auto_eval_config
 )
 print("✅ Auto Evaluation Service Initialized")
 
@@ -256,16 +250,14 @@ async def chat(request: Request):
                 print(f"   - Context length: {len(eval_data.retrieved_context)} chars")
                 print(f"   - Answer length: {len(eval_data.answer)} chars")
                 
-                # 异步执行评估（不阻塞流结束）
-                asyncio.create_task(
-                    auto_eval_service.auto_evaluate_async(
-                        query=user_query,
-                        retrieved_context=eval_data.retrieved_context,
-                        generated_answer=eval_data.answer,
-                        session_id=session_id,
-                        repo_url=repo_url,
-                        language="zh" if any('\u4e00' <= c <= '\u9fff' for c in user_query) else "en"
-                    )
+                # 异步执行评估（sidecar 队列，不阻塞主链路）
+                await auto_eval_service.auto_evaluate_async(
+                    query=user_query,
+                    retrieved_context=eval_data.retrieved_context,
+                    generated_answer=eval_data.answer,
+                    session_id=session_id,
+                    repo_url=repo_url,
+                    language="zh" if any('\u4e00' <= c <= '\u9fff' for c in user_query) else "en"
                 )
             else:
                 if not auto_eval_service:
@@ -466,10 +458,33 @@ async def auto_eval_stats():
                 "async_mode": auto_eval_service.config.async_evaluation,
                 "custom_weight": auto_eval_service.config.custom_weight,
                 "ragas_weight": auto_eval_service.config.ragas_weight,
-                "diff_threshold": auto_eval_service.config.diff_threshold
+                "diff_threshold": auto_eval_service.config.diff_threshold,
+                "visualize_only": auto_eval_service.config.visualize_only,
             },
+            "runtime": auto_eval_service.get_runtime_status(),
             "review_queue_size": len(queue),
             "last_update": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
+
+
+@app.get("/auto-eval/metrics")
+async def auto_eval_metrics():
+    """
+    获取自动评估运行时指标（可观测专用）
+
+    GET /auto-eval/metrics
+    """
+    try:
+        auto_eval_service = get_auto_evaluation_service()
+        if not auto_eval_service:
+            return {"error": "Auto evaluation service not initialized", "status": "failed"}
+
+        return {
+            "status": "success",
+            "metrics": auto_eval_service.get_metrics(),
+            "last_update": datetime.now().isoformat(),
         }
     except Exception as e:
         return {"error": str(e), "status": "failed"}

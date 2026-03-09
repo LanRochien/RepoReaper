@@ -17,6 +17,36 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """从环境变量读取布尔值。"""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    """从环境变量读取整数值。"""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """从环境变量读取浮点值。"""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 # ============================================================
 # Agent 分析配置
 # ============================================================
@@ -125,6 +155,43 @@ class QdrantServiceConfig:
     hnsw_ef_construct: int = 100
     batch_size: int = 100
     timeout: float = 30.0
+
+
+# ============================================================
+# 自动评估配置
+# ============================================================
+
+@dataclass
+class AutoEvaluationConfig:
+    """自动评估与可观测配置（不影响主链路功能）。"""
+    enabled: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_ENABLED", True))
+    use_ragas: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_USE_RAGAS", False))
+    custom_weight: float = field(default_factory=lambda: _env_float("AUTO_EVAL_CUSTOM_WEIGHT", 0.7))
+    ragas_weight: float = field(default_factory=lambda: _env_float("AUTO_EVAL_RAGAS_WEIGHT", 0.3))
+    diff_threshold: float = field(default_factory=lambda: _env_float("AUTO_EVAL_DIFF_THRESHOLD", 0.2))
+    min_quality_score: float = field(default_factory=lambda: _env_float("AUTO_EVAL_MIN_QUALITY_SCORE", 0.4))
+    async_evaluation: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_ASYNC", True))
+    min_query_length: int = field(default_factory=lambda: _env_int("AUTO_EVAL_MIN_QUERY_LENGTH", 10))
+    min_answer_length: int = field(default_factory=lambda: _env_int("AUTO_EVAL_MIN_ANSWER_LENGTH", 100))
+    require_repo_url: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_REQUIRE_REPO_URL", True))
+    require_code_in_context: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_REQUIRE_CODE_CONTEXT", True))
+
+    # P0: 仅可观测模式（只打点不落盘）
+    visualize_only: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_VISUALIZE_ONLY", False))
+
+    # P0: sidecar 队列
+    queue_enabled: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_QUEUE_ENABLED", True))
+    queue_maxsize: int = field(default_factory=lambda: _env_int("AUTO_EVAL_QUEUE_MAXSIZE", 500))
+    drop_when_queue_full: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_DROP_WHEN_QUEUE_FULL", True))
+
+    # P0: Ragas 可观测控制
+    ragas_sample_rate: float = field(default_factory=lambda: _env_float("AUTO_EVAL_RAGAS_SAMPLE_RATE", 0.1))
+    ragas_timeout_sec: float = field(default_factory=lambda: _env_float("AUTO_EVAL_RAGAS_TIMEOUT_SEC", 8.0))
+    ragas_circuit_breaker_enabled: bool = field(
+        default_factory=lambda: _env_bool("AUTO_EVAL_RAGAS_CB_ENABLED", True)
+    )
+    ragas_cb_fail_threshold: int = field(default_factory=lambda: _env_int("AUTO_EVAL_RAGAS_CB_FAIL_THRESHOLD", 5))
+    ragas_cb_reset_sec: int = field(default_factory=lambda: _env_int("AUTO_EVAL_RAGAS_CB_RESET_SEC", 120))
 
 
 # ============================================================
@@ -244,3 +311,4 @@ agent_config = AgentAnalysisConfig()
 vector_config = VectorServiceConfig()
 conversation_config = ConversationConfig()
 qdrant_config = QdrantServiceConfig()
+auto_eval_config = AutoEvaluationConfig()
